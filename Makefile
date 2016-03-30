@@ -69,6 +69,12 @@ clean:
 verbose: clean MSI
 	./MSI -m300 -tf
 	
+add:
+	git add MSI.m
+	
+push:
+	git push origin master
+	
 
 
     
