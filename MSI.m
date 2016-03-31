@@ -67,9 +67,9 @@ type
   ProcState:
     Record
       state: enum { PM, PS, PI,
-                  PIS_D,
-				  PM_A,
-				  PI_A 
+                  PIS_D, PSI_A, PM_A,
+				  PIM_A, PMI_A,
+				  PII_A 
                   };
       pending: Node;
 	  val: Value;
@@ -149,42 +149,13 @@ Begin
     then
       if n != rqst
       then 
-        Send(Inv, n, rqst, VC1, UNDEFINED, 0); ----put "invalidating: "; --put n; --put rqst; --put "\n";
+        Send(Inv, n, rqst, VC0, UNDEFINED, 0); ----put "invalidating: "; --put n; --put rqst; --put "\n";
         RemoveFromSharersList(n);
       endif;
     endif;
   endfor;
 End;
 
-Procedure AddToRequesterList(owner:Node; n:Node);
-Begin
-	if MultiSetCount(i:Procs[owner].requesters, Procs[owner].requesters[i] = n) = 0
-	then
-		MultiSetAdd(n, Procs[owner].requesters);
-	endif;
-End;
-
-Function IsRequester(owner:Node; n:Node) : Boolean;
-Begin
-	return MultiSetCount(i:Procs[owner].requesters, Procs[owner].requesters[i] = n) > 0
-End;
-
-Procedure RemoveFromRequesterList(owner:Node; n:Node);
-Begin
-	MultiSetRemovePred(i:Procs[owner].requesters, Procs[owner].requesters[i] = n);
-End;
-
-Procedure SendDataToRequesters(owner:Node);
-Begin
-	Send(Data, HomeType, owner, VC2, Procs[owner].val, 0);
-	for n:Node do
-		if (IsMember (n, Proc) &
-			MultiSetCount(i: Procs[owner].requesters, Procs[owner].requesters[i] = n) != 0)
-		then
-			Send(Data, n, owner, VC2, Procs[owner].val, 0);
-		endif;
-	endfor;
-End;
 -------------------------------------------------------------------------------------------------------------
 -- Home Receive Procedure --
 -------------------------------------------------------------------------------------------------------------
@@ -213,30 +184,30 @@ Begin
 		switch msg.mtype
 		
 			case GetM:
-				Send(GetMFwd, HomeNode.owner, msg.src, VC1, UNDEFINED, 0);
+				Send(GetMFwd, HomeNode.owner, msg.src, VC0, UNDEFINED, 0);
 				HomeNode.owner := msg.src;
 				HomeNode.state := HMM_A;
 				
 			case GetS:
-				Send(GetSFwd, HomeNode.owner, msg.src, VC1, UNDEFINED, 0);
+				Send(GetSFwd, HomeNode.owner, msg.src, VC0, UNDEFINED, 0);
 				AddToSharersList(msg.src);
 				AddToSharersList(HomeNode.owner);
-				--????undefine HomeNode.owner;
+				undefine HomeNode.owner;
 				HomeNode.state := HMS_D; 
 				
 			case PutM:
-                if(msg.src = HomeNode.owner)
-                    then
+               -- if(msg.src = HomeNode.owner)
+                  --  then
                     Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
                     HomeNode.val := msg.val;
                     undefine HomeNode.owner;
                     HomeNode.state := HI;
-                else
-                    Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
-                 endif;    
+                --else
+                   -- Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
+                 --endif;    
                  
-			case PutS:
-				msg_processed := true; /*Stale putS*/
+			--case PutS:
+				--msg_processed := true; /*Stale putS*/
 								
 			else
 				ErrorUnhandledMsg(msg, HomeType);
@@ -251,23 +222,31 @@ Begin
 		switch msg.mtype
 		
 			case GetS:     
-			  Send(Data, msg.src, HomeType, VC0, HomeNode.val, 0);
+			  Send(Data, msg.src, HomeType, VC1, HomeNode.val, 0);
 			  AddToSharersList(msg.src);
 					
 			case GetM:
 			  HomeNode.owner := msg.src;
               SendInvReqToSharers(msg.src);
-			  HomeNode.state := HM;
-			  if(IsSharer(msg.src))
+			 
+			 if(IsSharer(msg.src))
               then
 				RemoveFromSharersList(msg.src);
 				cnt := cnt - 1;
 			  endif;       
-			  Send(GetMAck, msg.src, HomeType, VC1, UNDEFINED, cnt); 
 			  
-			--case PutM:
-				--RemoveFromSharersList(msg.src);/*Do I need this?*/
-				--Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
+			  if cnt = 0
+				then
+					HomeNode.state := HM;
+				else
+					HomeNode.state := HSM_A;
+				endif;
+				
+				Send(GetMAck, msg.src, HomeType, VC1, UNDEFINED, cnt); 
+			  
+			case PutM:
+				RemoveFromSharersList(msg.src);/*Do I need this?*/
+				Send(PutAck, msg.src, HomeType, VC0, UNDEFINED, 0);
 			
 			case PutS:
 				if(IsSharer(msg.src))
@@ -296,11 +275,11 @@ Begin
 				  
 				case GetS:
 				  HomeNode.state := HS;			----put "GetS in HI \n\n";
-				  Send(Data, msg.src, HomeType, VC0, HomeNode.val, 0);
+				  Send(Data, msg.src, HomeType, VC1, HomeNode.val, 0);
 				  AddToSharersList(msg.src);
 				  
-				case PutS:
-					msg_processed := true; /*Discard stale PutS*/
+				--case PutS:
+					--msg_processed := true; /*Discard stale PutS*/
 					
 				/*case PutM:
 					Assert(HomeNode.owner != msg.src);
@@ -319,24 +298,24 @@ Begin
 		case GetM:
 			msg_processed := false; /*stall*/
 
-		case GetS:  -- msg_processed := false;  
-			Send(GetSFwd, HomeNode.owner, msg.src, VC1, UNDEFINED, 0);
-			AddToSharersList(msg.src);
+		case GetS:   msg_processed := false;  
+			--Send(GetSFwd, HomeNode.owner, msg.src, VC1, UNDEFINED, 0);
+			--AddToSharersList(msg.src);
 			
 		case PutS: msg_processed := false;
 			--RemoveFromSharersList(msg.src);
 			--Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
 			
-		case PutM:
-			--Assert(msg.src != HomeNode.owner) "Data from owner in transient home state"; /* Should be OK? */
-		    if (msg.src = HomeNode.owner)
-			then
-				HomeNode.val := msg.val;
-				undefine HomeNode.owner;
-				RemoveFromSharersList(msg.src);
-				HomeNode.state := HS;
-				Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
-			endif
+		case PutM: msg_processed := true;
+			Assert(msg.src != HomeNode.owner) "Data from owner in transient home state"; /* Should be OK? */
+		    --if (msg.src = HomeNode.owner)
+			--then
+				--HomeNode.val := msg.val;
+				--undefine HomeNode.owner;
+				--RemoveFromSharersList(msg.src);
+				--HomeNode.state := HS;
+				--Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
+			--endif
 			
 		case Data:
 			HomeNode.val := msg.val;
@@ -355,26 +334,49 @@ Begin
 			msg_processed := false;
 			
 		case GetS:
-			Send(GetSFwd, HomeNode.owner, msg.src, VC1, UNDEFINED, 0); /* goto HMS_D? */
+			msg_processed := false;
+			--Send(GetSFwd, HomeNode.owner, msg.src, VC1, UNDEFINED, 0); /* goto HMS_D? */
 			
 		case PutS:
 			msg_processed := true; /*Discard stale PutS*/
 			
+		case PutM: 
+		if msg.src = HomeNode.owner
+		then
+			msg_processed := false;
+		else
+			msg_processed := true;
+		endif
+			
+		case GetMAck:
+			HomeNode.state := HM;
+			
+		--case Data:
+			--msg_processed := true; /*Discard stale data*/
+			
+		else
+			ErrorUnhandledMsg(msg, HomeType);
+		
+		endswitch;
+		
+	case HSM_A:
+		switch msg.mtype
+		
+		case GetM:
+			msg_processed := false;
+			
+		case GetS:
+			msg_processed := false;
+			
 		case PutM:
-			--Assert(HomeNode.owner = msg.src | HomeNode.pending = msg.src) "Data from non-owner";
-			if(msg.src = HomeNode.owner)
-			then
-				HomeNode.val := msg.val;
-				HomeNode.state := HM;
-				--HomeNode.owner := HomeNode.pending;
-				undefine HomeNode.pending;
-				Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
-			endif;
-			/*else, discard stale value*/
+			msg_processed := false;
 			
-		case Data:
-			msg_processed := true; /*Discard stale data*/
+		case PutS:
+			msg_processed := true;
 			
+		case GetMAck:
+			HomeNode.state := HM;
+		
 		else
 			ErrorUnhandledMsg(msg, HomeType);
 		
@@ -424,8 +426,8 @@ Begin
 				Send(Data, HomeType, p, VC2, pv, 0);
 				ps := PS;
 				
-			case PutAck:
-				msg_processed := true; /*Discard stale ack */
+			--case PutAck:
+				--msg_processed := true; /*Discard stale ack */
 				
             else
                 ErrorUnhandledMsg(msg, p);
@@ -437,18 +439,18 @@ Begin
         switch msg.mtype
 		
 			case Inv:
-			  Send(InvAck, msg.src, p, VC2, UNDEFINED, 0); ----put msg.src; --put p; --put "\n";
+			  Send(InvAck, msg.src, p, VC0, UNDEFINED, 0); ----put msg.src; --put p; --put "\n";
 			  Undefine pv;
 			  ps := PI;
 			  
-			case PutAck:
-				msg_processed := true; /*Discard stale ack*/
+			--case PutAck:
+				--msg_processed := true; /*Discard stale ack*/
 				
-			case GetMFwd:
-				Send(Data, msg.src, p, VC2, pv, 0); /*Send data, previous owner. Might need dirty bit here */
+			--case GetMFwd:
+				--Send(Data, msg.src, p, VC2, pv, 0); /*Send data, previous owner. Might need dirty bit here */
 				
-			case GetSFwd:
-				Send(Data, msg.src, p, VC2, pv, 0); /*Discard stale GetSFwd*/
+			--case GetSFwd:
+				--Send(Data, msg.src, p, VC2, pv, 0); /*Discard stale GetSFwd*/
 			  
 			--case Data:
 			  --msg_processed := true;
@@ -459,9 +461,9 @@ Begin
 		  
 		endswitch; 
 		
-	  case PI: 			--INVALID STATE @ CORE
+	  --case PI: 			--INVALID STATE @ CORE
 	  
-		switch msg.mtype
+		--switch msg.mtype
 		
 			--case Data:
 			  --msg_processed := true;
@@ -469,22 +471,22 @@ Begin
 			--case GetMAck:
 				--msg_processed := true;
 				
-			case GetSFwd: /*Forward GetSFwd back to Directory. Change to Nack?*/
-				Send(GetS, HomeType, msg.src, VC2, UNDEFINED, 0); /*Discard stale fwd*/
+			--case GetSFwd: /*Forward GetSFwd back to Directory. Change to Nack?*/
+				--Send(GetS, HomeType, msg.src, VC2, UNDEFINED, 0); /*Discard stale fwd*/
 				
-			case GetMFwd:
-				Send(GetMAck, msg.src, p, VC2, UNDEFINED, 0);
+			--case GetMFwd:
+				--Send(GetMAck, msg.src, p, VC2, UNDEFINED, 0);
 				
-			case PutAck:
-				msg_processed := true; /*Discard stale PutAck*/
+			--case PutAck:
+				--msg_processed := true; /*Discard stale PutAck*/
 				
-			case Inv:
-				Send(InvAck, msg.src, p, VC2, UNDEFINED, 0); /*Discard stale inv*/
+			--case Inv:
+				--Send(InvAck, msg.src, p, VC0, UNDEFINED, 0); /*Discard stale inv*/
 			  
-			else
-			  ErrorUnhandledMsg(msg, p);
+			--else
+			  --ErrorUnhandledMsg(msg, p);
 			  
-		endswitch;
+		--endswitch;
         
 		
 	---------------------------------------------------------------------
@@ -498,7 +500,7 @@ Begin
 			--case GetSFwd:
 				--msg_processed := true; /*Discard stale Fwd*/
 		
-			case Inv: /* May need IS_D state here */
+			case Inv: /* May need IS_D state here */	--VC0
 				msg_processed := false;
                -- Send(InvAck, msg.src, p, VC2, UNDEFINED, 0);     /*stall*/
 				--po := msg.src;
@@ -507,28 +509,28 @@ Begin
 				--ps := PII_A;
 				--pending := msg.src;
 			
-			case Data:
-				if !isundefined(pending)
-				then
-					ps := PI;
-					Send(InvAck, pending, p, VC2, UNDEFINED, 0);
-					undefine pending;
-				else
+			case Data:	--VC1
+				--if !isundefined(pending)
+				--then
+					--ps := PI;
+					--Send(InvAck, pending, p, VC2, UNDEFINED, 0);
+					--undefine pending;
+				--else
 					pv := msg.val;
 					ps := PS;
-				endif
+				--endif
 				
-			case GetSFwd: /*Forward GetS back to Directory. Change to Nack?*/
-				Send(GetS, HomeType, msg.src, VC2, UNDEFINED, 0);
+			--case GetSFwd: /*Forward GetS back to Directory. Change to Nack?*/
+				--Send(GetS, HomeType, msg.src, VC2, UNDEFINED, 0);
 				
-			case GetMFwd:
-				Send(GetMAck, msg.src, p, VC2, UNDEFINED, 0);
+		--	case GetMFwd:
+			--	Send(GetMAck, msg.src, p, VC2, UNDEFINED, 0);
 				
 			--case GetMAck:
 				--msg_processed := true;
 				
-			case PutAck:
-				msg_processed := true; /*Discard stale PutAck*/
+			--case PutAck:
+				--msg_processed := true; /*Discard stale PutAck*/
 			
 			else
 			  ErrorUnhandledMsg(msg, p);
@@ -540,74 +542,37 @@ Begin
 	case PM_A: /* Write / Upgrade request */
 		 switch msg.mtype
 		 
-			case GetMFwd: /* May need to use next pending owner here */
-				--msg_processed := false;
-				--Send(PutM, HomeType, p, VC2, UNDEFINED, 0);
-				--Send(GetMAck, msg.src, p, VC1, UNDEFINED, 0);
-
-				--LastWrite := pv; --??????
-				--undefine pv;
-				--ps := PIM_A;
-				pending := msg.src;
+			case GetMFwd: /* May need to use next pending owner here */	--VC1
+				msg_processed := false;
 				
 			case GetSFwd: /* May need requesters list here */
-				--msg_processed := false;
-				/*Must stall or LastWrite can occur when home is in HS with stale data*/
-				AddToRequesterList(p, msg.src);
-				dirty := true;
-				/*Send(Data, msg.src, p, VC2, pv);
-				Send(Data, HomeType, p, VC2, pv);
-				LastWrite := pv;
-				ps := PIS_A;*/
+				msg_processed := false;
 				
 			case Inv:
-				Send(InvAck, msg.src, p, VC2, UNDEFINED, 0);
-				--Send(InvAck, HomeType, p, VC2, UNDEFINED, 0);
-				--undefine pv;
-				--ps := PIM_A;
-				/*Send to PMI_A?*/
+				Send(InvAck, msg.src, p, VC0, UNDEFINED, 0);
+
 				
-			case InvAck:
-				if pcnt <= 0
-				then
-					pcnt := pcnt - 1;
-				else
-					if pcnt = 1
-					then
-						ps := PM;
-						LastWrite := pv;
-						pcnt := 0;
-					else
-						pcnt := pcnt - 1;
-					endif
-				endif
-				
-			case GetMAck:
-				if msg.cnt = 0 | pcnt + msg.cnt = 0
+			case GetMAck:									--VC2
+				if msg.cnt = 0
 				then
 					LastWrite := pv;
-					if !isundefined(pending)
-					then
-						Send(GetMAck, pending, p, VC2, UNDEFINED, 0);
-						undefine pv;
-						ps := PI;
-						undefine pending;	
-					elsif dirty
-					then
-						SendDataToRequesters(p);
-						ps := PS;
-						pcnt := 0;
-						Procs[p].dirty := false;
-					else
-						ps := PM;
-						pcnt := 0;
-					endif
+					ps := PM;
 				else
-					pcnt := pcnt + msg.cnt;
+					pcnt := msg.cnt;
 				endif
 				
-			case PutAck:
-				msg_processed := true; /*Discard stale PutAck*/	
+			case InvAck:								--VC0
+				if pcnt > 0
+				then
+					pcnt := pcnt - 1;
+					if pcnt = 0
+					then
+						LastWrite := pv;
+						ps := PM;
+					endif
+				else
+				msg_processed := false;
+			   endif
 			
 			else
 			  ErrorUnhandledMsg(msg, p);
@@ -615,30 +580,61 @@ Begin
 		
 	----------Invalid-------------
 		
-	case PI_A:
+	case PSI_A: /*Evict from shared*/
 		switch msg.mtype
-		 
-			case GetMFwd:
-				Send(GetMAck, msg.src, p, VC2, UNDEFINED, 0);
+			--case GetMFwd:
+				--msg_processed := false;
+				--Send(GetMAck, msg.src, p, VC2, UNDEFINED, 0);
 				--LastWrite := pv;
-				undefine pv;
-				ps := PI; /* Goto PI_A to wait for PutAck? */
+				--undefine pv;
+				--ps := PI; /* Goto PI_A to wait for PutAck? */
 
-			case GetSFwd:
-				Send(Data, msg.src, p, VC2, pv, 0);
+			case GetSFwd:    --VC1
+				Send(Data, msg.src, p, VC1, pv, 0);
 			
-			case PutAck:
+			case PutAck:       --VC2
 				undefine pv;
 				ps := PI;
 				
-			case Inv:
-			  Send(InvAck, msg.src, p, VC1, pv, 0);
+			case Inv:     --VC0
+			  Send(InvAck, msg.src, p, VC0, pv, 0);
 			  Undefine pv;
-			  ps := PI;
+			  ps := PII_A;
 				
 			else
 			  ErrorUnhandledMsg(msg, p);
         endswitch;
+		
+	case PMI_A:	/*Write back*/
+		switch msg.mtype
+			
+			case GetMFwd: --VC1
+				Send(GetMAck, msg.src, p, VC2, UNDEFINED, 0);
+				undefine pv;
+				ps := PII_A;
+				
+			case GetSFwd:
+				Send(Data, msg.src, p, VC1, pv, 0);
+				Send(Data, HomeType, p, VC2, pv, 0);
+			
+			case PutAck: --VC0
+				undefine pv;
+				ps := PI;
+				
+			else
+				ErrorUnhandledMsg(msg, p);
+		endswitch;
+		
+	case PII_A:
+		switch msg.mtype
+		
+			case PutAck: --VC0
+				ps := PI;
+				
+			else
+				ErrorUnhandledMsg(msg, p);
+				
+		endswitch;
 
   ----------------------------
   -- Error catch
@@ -689,7 +685,7 @@ ruleset n:Proc Do
 		==>
 		Send(PutM, HomeType, n, VC1, p.val, 0); 
 		--LastWrite := p.val;
-		p.state := PI_A;
+		p.state := PMI_A;
 		--undefine p.val;
 		if(!isundefined(p.pending))
 		then
@@ -708,7 +704,7 @@ ruleset n:Proc Do
   (p.state = PS)
   ==>
 		Send(PutS, HomeType, n, VC0, UNDEFINED, 0);
-		p.state := PI_A;
+		p.state := PSI_A;
 		--undefine p.val;
 	endrule;
 
