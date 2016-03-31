@@ -64,6 +64,7 @@ type
       sharers: multiset [ProcCount] of Node;    /*--No need for sharers in this protocol, but this is a good way to represent them*/
       val: Value; 
 	  forwards: 0..ProcCount-1;
+	  inval: Boolean;
     End;
 
   ProcState:
@@ -189,12 +190,12 @@ End;
 
 Procedure SendDataToRequesters(owner:Node);
 Begin
-	Send(Data, HomeType, owner, VC2, Procs[owner].val, 0);
+	--Send(Data, HomeType, owner, VC2, Procs[owner].val, 0);
 	for n:Node do
 		if (IsMember (n, Proc) &
 			MultiSetCount(i: Procs[owner].requesters, Procs[owner].requesters[i] = n) != 0)
 		then
-			Send(Data, n, owner, VC2, Procs[owner].val, 0);
+			Send(DataAck, n, owner, VC2, Procs[owner].val, 0);
 		endif;
 	endfor;	
 End;
@@ -278,10 +279,6 @@ Begin
 				cnt := cnt - 1;
 			  endif;       
 			  Send(GetMAck, msg.src, HomeType, VC1, UNDEFINED, cnt); 
-			  
-			--case PutM:
-				--RemoveFromSharersList(msg.src);/*Do I need this?*/
-				--Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
 			
 			case PutS:
 				if(IsSharer(msg.src))
@@ -316,10 +313,6 @@ Begin
 				case PutS:
 					msg_processed := true; /*Discard stale PutS*/
 					
-				/*case PutM:
-					Assert(HomeNode.owner != msg.src);
-					Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);*/
-					
 				else
 				  ErrorUnhandledMsg(msg, HomeType);
 
@@ -334,10 +327,18 @@ Begin
 			msg_processed := false; /*stall*/
 
 		case GetS:  -- msg_processed := false;  
-			Send(GetSFwd, HomeNode.owner, msg.src, VC1, UNDEFINED, 0);
-			AddToSharersList(msg.src);
+			if !isundefined(HomeNode.owner)
+			then
+				Send(GetSFwd, HomeNode.owner, msg.src, VC1, UNDEFINED, 0);
+				AddToSharersList(msg.src);
+				HomeNode.forwards := HomeNode.forwards + 1;
+			else
+				msg_processed := false;
+				--Send(Data, msg.src, HomeType, VC1, HomeNode.val, 0);
+			endif
 			
-		case PutS: msg_processed := false;
+		case PutS: 
+			msg_processed := false;
 			--RemoveFromSharersList(msg.src);
 			--Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
 			
@@ -364,6 +365,8 @@ Begin
 			if HomeNode.forwards = 0
 			then
 				HomeNode.state := HS;
+				HomeNode.val := msg.val;
+				undefine HomeNode.owner;
 			endif
 			
 		else
@@ -377,21 +380,33 @@ Begin
 		case GetM:
 			msg_processed := false;
 			
-		case GetS:
-			Send(GetSFwd, HomeNode.owner, msg.src, VC1, UNDEFINED, 0); /* goto HMS_D? */
+		case GetS: msg_processed := false;
+			--Send(GetSFwd, HomeNode.owner, msg.src, VC1, UNDEFINED, 0); /* goto HMS_D? */
+			--AddToSharersList(msg.src);
+			--HomeNode.forwards := 1;
 			
 		case PutS:
 			msg_processed := true; /*Discard stale PutS*/
 			
 		case PutM:
 			--Assert(HomeNode.owner = msg.src | HomeNode.pending = msg.src) "Data from non-owner";
-			if(msg.src = HomeNode.owner)
+			if(msg.src != HomeNode.owner)
 			then
-				HomeNode.val := msg.val;
-				HomeNode.state := HM;
+				--HomeNode.val := msg.val;
+				if !HomeNode.inval
+				then
+					HomeNode.state := HM;
+				else
+					HomeNode.state := HI;
+					undefine HomeNode.owner;
+					HomeNode.inval := false;
+				endif
 				--HomeNode.owner := HomeNode.pending;
-				undefine HomeNode.pending;
-				Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
+				--undefine HomeNode.pending;
+				--Send(PutAck, msg.src, HomeType, VC1, UNDEFINED, 0);
+			else
+				HomeNode.inval := true;
+				HomeNode.val := msg.val;
 			endif;
 			/*else, discard stale value*/
 			
@@ -436,6 +451,7 @@ Begin
             
             case GetMFwd:
                 Send(GetMAck, msg.src, p, VC2, UNDEFINED, 0);
+				Send(PutM, HomeType, p, VC2, UNDEFINED, 0);
 				undefine pv;
 				ps := PI;
             
@@ -443,8 +459,8 @@ Begin
 				--msg_processed := true; /*Discard stale ack*/
 				
             case GetSFwd:
-				Send(Data, msg.src, p, VC2, pv, 0);
-				Send(Data, HomeType, p, VC2, pv, 0);
+				Send(DataAck, msg.src, p, VC2, pv, 0);
+				--Send(Data, HomeType, p, VC2, pv, 0);
 				ps := PS;
 				
 			case PutAck:
@@ -471,7 +487,7 @@ Begin
 				Send(Data, msg.src, p, VC2, pv, 0); /*Send data, previous owner. Might need dirty bit here */
 				
 			case GetSFwd:
-				Send(Data, msg.src, p, VC2, pv, 0); /*Discard stale GetSFwd*/
+				Send(DataAck, msg.src, p, VC2, pv, 0); /*Discard stale GetSFwd*/
 			  
 			--case Data:
 			  --msg_processed := true;
@@ -493,7 +509,7 @@ Begin
 				--msg_processed := true;
 				
 			case GetSFwd: /*Forward GetSFwd back to Directory. Change to Nack?*/
-				Send(GetS, HomeType, msg.src, VC2, UNDEFINED, 0); /*Discard stale fwd*/
+				--Send(GetS, HomeType, msg.src, VC2, UNDEFINED, 0); /*Discard stale fwd*/
 				
 			case GetMFwd:
 				Send(GetMAck, msg.src, p, VC2, UNDEFINED, 0);
@@ -544,10 +560,10 @@ Begin
 			case DataAck:
 				pv := msg.val;
 				ps := PS;
-				Send(DataAck, HomeType, p, VC2, UNDEFINED, 0);
+				Send(DataAck, HomeType, p, VC2, msg.val, 0);
 				
 			case GetSFwd: /*Forward GetS back to Directory. Change to Nack?*/
-				Send(GetS, HomeType, msg.src, VC2, UNDEFINED, 0);
+				--Send(GetS, HomeType, msg.src, VC2, UNDEFINED, 0);
 				
 			case GetMFwd:
 				Send(GetMAck, msg.src, p, VC2, UNDEFINED, 0);
@@ -617,6 +633,7 @@ Begin
 					if !isundefined(pending)
 					then
 						Send(GetMAck, pending, p, VC2, UNDEFINED, 0);
+						Send(PutM, HomeType, p, VC2, UNDEFINED, 0);
 						undefine pv;
 						ps := PI;
 						undefine pending;	
@@ -653,7 +670,7 @@ Begin
 				ps := PI; /* Goto PI_A to wait for PutAck? */
 
 			case GetSFwd:
-				Send(Data, msg.src, p, VC2, pv, 0);
+				--Send(DataAck, msg.src, p, VC2, pv, 0);
 			
 			case PutAck:
 				undefine pv;
@@ -813,6 +830,7 @@ startstate
   undefine HomeNode.owner;
   HomeNode.val := v;
   HomeNode.forwards := 0;
+  HomeNode.inval := false;
 	endfor;
 	LastWrite := HomeNode.val;
   
